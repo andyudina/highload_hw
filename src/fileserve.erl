@@ -3,8 +3,7 @@
 %% This middleware serves static files given a URL prefix and a local path,
 %% any request containing "/../" is ignored.
 
--module(elli_fileserve).
--behaviour(elli_handler).
+-module(fileserve).
 
 -compile({parse_transform, ct_expand}).
 
@@ -12,16 +11,10 @@
 
 -export([handle/2, handle_event/3]).
 
-%% exported for mockability in tests (called through ?MODULE)
--export([file_size/1]).
-
--ifdef(TEST).
--compile([export_all]).
--endif.
-
+raw_path(#req{raw_path = Path})  -> Path.
 
 handle(Req, Config) ->
-    case unprefix(elli_request:raw_path(Req), prefix(Config)) of
+    case unprefix(raw_path(Req), prefix(Config)) of
         undefined ->
             ignore;
         FilePath ->
