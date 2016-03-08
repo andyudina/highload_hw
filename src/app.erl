@@ -1,5 +1,4 @@
 -module(app).
--export([start_link/0]).
 
 -behaviour(application).
 

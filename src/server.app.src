@@ -8,5 +8,5 @@
                   stdlib,
                   inets
                  ]},
-  {env, []},
+  {env, []}
  ]}.

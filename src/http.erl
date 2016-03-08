@@ -78,9 +78,7 @@ handle_request(S, PrevB) ->
     Response = execute_callback(Req1),
     t(user_end),
 
-    handle_response(Req1, B2, Response);
-
-    end.
+    handle_response(Req1, B2, Response).
 
 handle_response(Req, Buffer, {response, Code, UserHeaders, Body}) ->
     #req{callback = {Mod, Args}} = Req,
@@ -156,7 +154,7 @@ send_file(Req, Code, Headers, Filename, {Offset, Length}) ->
                             %handle_event(Mod, client_closed, [before_response], Args)
                     end;
                 {error, Closed} when Closed =:= closed orelse Closed =:= enotconn ->
-                    ok. %TODO: logging
+                    ok %TODO: logging
                     %handle_event(Mod, client_closed, [before_response], Args)
             after
                 file:close(Fd)

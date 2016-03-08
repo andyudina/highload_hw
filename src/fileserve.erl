@@ -5,10 +5,8 @@
 
 -module(fileserve).
 
--compile({parse_transform, ct_expand}).
-
 -include_lib("kernel/include/file.hrl").
-
+-include("server.hrl").
 -export([handle/2, handle_event/3]).
 
 raw_path(#req{raw_path = Path})  -> Path.

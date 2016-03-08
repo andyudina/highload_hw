@@ -1,7 +1,7 @@
 %% @doc: Wrapper for plain and SSL sockets. Based on
 %% mochiweb_socket.erl
 
--module(elli_tcp).
+-module(tcp).
 -export([listen/3, accept/3, recv/3, send/2, close/1, setopts/2, sendfile/5, peername/1]).
 
 -export_type([socket/0]).

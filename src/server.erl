@@ -5,7 +5,7 @@
 %% API
 -export([start_link/0,
          %start_link/1,
-         stop/1,
+         stop/1
          %get_acceptors/1,
          %get_open_reqs/1,
          %get_open_reqs/2,
@@ -63,7 +63,7 @@ stop(S) ->
 %%% gen_server callbacks
 %%%===================================================================
 
-init() ->
+init(_Opts) ->
     process_flag(trap_exit, true),
 
     IPAddress = {127, 0, 0, 1},
@@ -91,7 +91,7 @@ init() ->
     %% tables, etc.
     % ok = Callback:handle_event(elli_startup, [], CallbackArgs),
 
-    {ok, Socket} = tcp:listen(SockType, Port, [binary,
+    {ok, Socket} = tcp:listen(plain, Port, [binary,
                                                     {ip, IPAddress},
                                                     {reuseaddr, true},
                                                     {backlog, 32768},
@@ -101,15 +101,14 @@ init() ->
 
     Acceptors = ets:new(acceptors, [private, set]),
     StartAcc  = fun() ->
-        Pid = http:start_link(self(), Socket). %),
+        Pid = http:start_link(self(), Socket), %),
         ets:insert(Acceptors, {Pid})
     end,
     [ StartAcc() || _ <- lists:seq(1, MinAcceptors)],
 
     {ok, #state{socket = Socket,
                 acceptors = Acceptors,
-                open_reqs = 0,
-                options = Options}}.
+                open_reqs = 0}}.
                 %callback = {Callback, CallbackArgs}}}.
 
 
