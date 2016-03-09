@@ -1,4 +1,4 @@
--module(app).
+-module(hw_server).
 
 -behaviour(application).
 

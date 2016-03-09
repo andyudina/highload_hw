@@ -1,12 +1,12 @@
-{application, server,
+{application, hw_server,
  [
   {description, "Test webserver for technopark highload course"},
   {vsn, "0.0.1"},
   {registered, []},
   {applications, [
                   kernel,
-                  stdlib,
-                  inets
+                  stdlib
                  ]},
-  {env, []}
+  {env, []},
+  {mod, {hw_server, []}}
  ]}.

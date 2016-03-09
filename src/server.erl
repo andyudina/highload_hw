@@ -66,8 +66,8 @@ stop(S) ->
 init(_Opts) ->
     process_flag(trap_exit, true),
 
-    IPAddress = {127, 0, 0, 1},
-    Port = 80,
+    IPAddress = {0, 0, 0, 0},
+    Port = 8080, %TODO: access to 80
     MinAcceptors = 20,
     %IPAddress      = proplists:get_value(ip, Opts, {0,0,0,0}),
     %Port           = proplists:get_value(port, Opts, 8080),

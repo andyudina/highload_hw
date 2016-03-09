@@ -9,22 +9,22 @@
 
 
 %% API
--export([start_link/4]).
+-export([start_link/2]).
 
 -export([send_response/4]).
 
 %-export([mk_req/7]). %% useful when testing.
 
 %% Exported for looping with a fully-qualified module name
--export([accept/4, handle_request/4, chunk_loop/1, split_args/1,
+-export([accept/4, handle_request/2, split_args/1,
          parse_path/1, keepalive_loop/3, keepalive_loop/5]).
 
 
--spec start_link(pid(), elli_tcp:socket(), proplists:proplist(), callback()) -> pid().
-start_link(Server, ListenSocket, Options, Callback) ->
-    proc_lib:spawn_link(?MODULE, accept, [Server, ListenSocket, Options, Callback]).
+-spec start_link(pid(), tcp:socket()) -> pid().
+start_link(Server, ListenSocket) ->
+    proc_lib:spawn_link(?MODULE, accept, [Server, ListenSocket]).
 
--spec accept(pid(), elli_tcp:socket(), proplists:proplist(), callback()) -> ok.
+-spec accept(pid(), tcp:socket(), proplists:proplist(), callback()) -> ok.
 %% @doc: Accept on the socket until a client connects. Handles the
 %% request, then loops if we're using keep alive or chunked
 %% transfer. If accept doesn't give us a socket within a configurable
@@ -61,17 +61,17 @@ keepalive_loop(Socket, NumRequests, Buffer, Options, Callback) ->
             ok
     end.
 
--spec handle_request(tcp:socket(), binary(), proplists:proplist(), callback()) ->
+-spec handle_request(tcp:socket(), binary()) ->
                             {'keep_alive' | 'close', binary()}.
 %% @doc: Handle a HTTP request that will possibly come on the
 %% socket. Returns the appropriate connection token and any buffer
 %% containing (parts of) the next request.
 handle_request(S, PrevB) ->
-    {Method, RawPath, V, B0} = get_request(S, PrevB, Opts, Callback), t(request_start),
-    {RequestHeaders, B1} = get_headers(S, V, B0, Opts, Callback),     t(headers_end),
+    {Method, RawPath, V, B0} = get_request(S, PrevB), t(request_start),
+    {RequestHeaders, B1} = get_headers(S, V, B0),     t(headers_end),
 
-    Req = mk_req(Method, RawPath, RequestHeaders, <<>>, V, S, Callback),
-    {RequestBody, B2} = get_body(S, RequestHeaders, B1, Opts, Callback), t(body_end),
+    Req = mk_req(Method, RawPath, RequestHeaders, <<>>, V, S),
+    {RequestBody, B2} = get_body(S, RequestHeaders, B1), t(body_end),
     Req1 = Req#req{body = RequestBody},
 
     t(user_start),
@@ -81,8 +81,6 @@ handle_request(S, PrevB) ->
     handle_response(Req1, B2, Response).
 
 handle_response(Req, Buffer, {response, Code, UserHeaders, Body}) ->
-    #req{callback = {Mod, Args}} = Req,
-
     Headers = [connection(Req, UserHeaders),
                content_length(UserHeaders, Body)
                | UserHeaders],
@@ -95,8 +93,6 @@ handle_response(Req, Buffer, {response, Code, UserHeaders, Body}) ->
 
 
 handle_response(Req, Buffer, {file, ResponseCode, UserHeaders, Filename, Range}) ->
-    #req{callback = {Mod, Args}} = Req,
-
     ResponseHeaders = [connection(Req, UserHeaders) | UserHeaders],
     send_file(Req, ResponseCode, ResponseHeaders, Filename, Range),
 
@@ -138,7 +134,6 @@ send_response(Req, Code, Headers, UserBody) ->
 %% contents of the given file.  Assumes correctly set response code
 %% and headers.
 send_file(Req, Code, Headers, Filename, {Offset, Length}) ->
-    #req{callback = {Mod, Args}} = Req,
     ResponseHeaders = [<<"HTTP/1.1 ">>, status(Code), <<"\r\n">>,
                        encode_headers(Headers), <<"\r\n">>],
 
@@ -159,7 +154,7 @@ send_file(Req, Code, Headers, Filename, {Offset, Length}) ->
             after
                 file:close(Fd)
             end;
-        {error, FileError} ->
+        {error, _FileError} ->
            ok %TODO: logging
            % handle_event(Mod, file_error, [FileError], Args)
     end, ok.
@@ -177,8 +172,8 @@ send_bad_request(Socket) ->
 
 %% @doc: Executes the user callback, translating failure into a proper
 %% response.
-execute_callback() ->
-    try filerserve:handle(Req, Args) of
+execute_callback(Req) ->
+    try filerserve:handle(Req) of
         {ok, Headers, {file, Filename}}       -> {file, 200, Headers, Filename, {0, 0}};
         {ok, Headers, Body}                   -> {response, 200, Headers, Body};
 %        {ok, Body}                            -> {response, 200, [], Body};
@@ -190,19 +185,19 @@ execute_callback() ->
 %            {file, HttpCode, Headers, Filename, Range};
         {HttpCode, Headers, Body}             -> {response, HttpCode, Headers, Body};
         {HttpCode, Body}                      -> {response, HttpCode, [], Body};
-        Unexpected                            ->
+        _Unexpected                           ->
             %handle_event(Mod, invalid_return, [Req, Unexpected], Args),
             {response, 500, [], <<"Internal server error">>}
     catch
         throw:{ResponseCode, Headers, Body} when is_integer(ResponseCode) ->
             {response, ResponseCode, Headers, Body};
-        throw:Exc ->
+        throw:_Exc ->
             %handle_event(Mod, request_throw, [Req, Exc, erlang:get_stacktrace()], Args),
             {response, 500, [], <<"Internal server error">>};
-        error:Error ->
+        error:_Error ->
             %handle_event(Mod, request_error, [Req, Error, erlang:get_stacktrace()], Args),
             {response, 500, [], <<"Internal server error">>};
-        exit:Exit ->
+        exit:_Exit ->
             %handle_event(Mod, request_exit, [Req, Exit, erlang:get_stacktrace()], Args),
             {response, 500, [], <<"Internal server error">>}
     end.
@@ -305,21 +300,20 @@ get_request(Socket, Buffer) ->
             exit(normal)
     end.
 
--spec get_headers(elli_tcp:socket(), version(), binary(), proplists:proplist(), callback()) ->
+-spec get_headers(elli_tcp:socket(), version(), binary(), proplists:proplist()) ->
                          {headers(), any()}.
-get_headers(_Socket, {0, 9}, _, _, _) ->
-    {[], <<>>};
+
 get_headers(Socket, {1, _}, Buffer) ->
     get_headers(Socket, Buffer, [], 0).
 
-get_headers(Socket, _, Headers, HeadersCount)
+get_headers(Socket, _, _Headers, HeadersCount)
   when HeadersCount >= 100 ->
     %handle_event(Mod, bad_request, [{too_many_headers, Headers}], Args),
     send_bad_request(Socket),
     tcp:close(Socket),
     exit(normal);
     
-get_headers(Socket, Buffer, Headers, HeadersCoun) ->
+get_headers(Socket, Buffer, Headers, HeadersCount) ->
     case erlang:decode_packet(httph_bin, Buffer, []) of
         {ok, {http_header, _, Key, _, Value}, Rest} ->
             NewHeaders = [{ensure_binary(Key), Value} | Headers],
@@ -327,9 +321,9 @@ get_headers(Socket, Buffer, Headers, HeadersCoun) ->
         {ok, http_eoh, Rest} ->
             {Headers, Rest};
         {ok, {http_error, _}, Rest} ->
-            get_headers(Socket, Rest, Headers, 10000); %TODO: header timeour
+            get_headers(Socket, Rest, Headers, 10000); %TODO: header timeout
         {more, _} ->
-            case tcp:recv(Socket, 0, header_timeout(Opts)) of
+            case tcp:recv(Socket, 0, 10000) of %TODO: header timeout
                 {ok, Data} ->
                     get_headers(Socket, <<Buffer/binary, Data/binary>>,
                                 Headers, HeadersCount);
@@ -344,8 +338,7 @@ get_headers(Socket, Buffer, Headers, HeadersCoun) ->
             end
     end.
 
--spec get_body(elli_tcp:socket(), headers(), binary(),
-               proplists:proplist(), callback()) -> {body(), binary()}.
+-spec get_body(elli_tcp:socket(), headers(), binary()) -> {body(), binary()}.
 %% @doc: Fetches the full body of the request, if any is available.
 %%
 %% At the moment we don't need to handle large requests, so there is
@@ -364,13 +357,13 @@ get_body(Socket, Headers, Buffer) ->
             ContentLength = ?b2i(binary:replace(ContentLengthBin,
                                                 <<" ">>, <<>>, [global])),
 
-            ok = check_max_size(Socket, ContentLength, Buffer, Opts, Callback),
+            ok = check_max_size(Socket, ContentLength, Buffer),
 
             case ContentLength - byte_size(Buffer) of
                 0 ->
                     {Buffer, <<>>};
                 N when N > 0 ->
-                    case tcp:recv(Socket, N, body_timeout(Opts)) of
+                    case tcp:recv(Socket, N, 30000) of %body timeout
                         {ok, Data} ->
                             {<<Buffer/binary, Data/binary>>, <<>>};
                         {error, Closed} when Closed =:= closed orelse Closed =:= enotconn ->
@@ -393,8 +386,8 @@ ensure_binary(Bin) when is_binary(Bin) -> Bin;
 ensure_binary(Atom) when is_atom(Atom) -> atom_to_binary(Atom, latin1).
 
 
-check_max_size(Socket, ContentLength, Buffer, Opts, {Mod, Args}) ->
-    case ContentLength > max_body_size(Opts) of
+check_max_size(Socket, ContentLength, Buffer) ->
+    case ContentLength > 1024000 of %max body size
         true ->
             %handle_event(Mod, bad_request, [{body_size, ContentLength}], Args),
 
@@ -403,7 +396,7 @@ check_max_size(Socket, ContentLength, Buffer, Opts, {Mod, Args}) ->
             %% our bandwidth, if the request size is too big, we
             %% simply close the socket.
 
-            case ContentLength < max_body_size(Opts) * 2 of
+            case ContentLength < 1024000 * 2 of  %max body size
                 true ->
                     OnSocket = ContentLength - size(Buffer),
                     tcp:recv(Socket, OnSocket, 60000),
@@ -422,7 +415,7 @@ check_max_size(Socket, ContentLength, Buffer, Opts, {Mod, Args}) ->
 
 -spec mk_req(Method::http_method(), {PathType::atom(), RawPath::binary()},
              RequestHeaders::headers(), RequestBody::body(), V::version(),
-             Socket::elli_tcp:socket() | undefined, Callback::callback()) ->
+             Socket::tcp:socket() | undefined) ->
              #req{}.
 mk_req(Method, RawPath, RequestHeaders, RequestBody, V, Socket) ->
     case parse_path(RawPath) of
@@ -430,7 +423,7 @@ mk_req(Method, RawPath, RequestHeaders, RequestBody, V, Socket) ->
             #req{method = Method, path = URL, args = URLArgs, version = V,
                  raw_path = Path, headers = RequestHeaders,
                  body = RequestBody, pid = self(), socket = Socket};
-        {error, Reason} ->
+        {error, _Reason} ->
             %handle_event(Mod, request_parse_error,
             %             [{Reason, {Method, RawPath}}], Args),
             send_bad_request(Socket),
@@ -541,17 +534,6 @@ split_args(Qs) ->
 %% any variables.
 t(Key) ->
     put({time, Key}, os:timestamp()).
-
-get_timings() ->
-    lists:flatmap(fun ({{time, Key}, Val}) ->
-                          if
-                              Key =:= accepted -> ok;
-                              true -> erase({time, Key})
-                          end,
-                          [{Key, Val}];
-                     (_) ->
-                          []
-                 end, get()).
 
 
 
