@@ -21,8 +21,7 @@
 -record(state, {socket :: tcp:socket(), %TODO: elli
                 acceptors :: non_neg_integer(),
                 open_reqs :: non_neg_integer(),
-                options :: [{_, _}],
-                callback :: callback()
+                options :: [{_, _}]
 }).
 
 %%%===================================================================

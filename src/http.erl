@@ -16,30 +16,30 @@
 %-export([mk_req/7]). %% useful when testing.
 
 %% Exported for looping with a fully-qualified module name
--export([accept/4, handle_request/2, split_args/1,
-         parse_path/1, keepalive_loop/3, keepalive_loop/5]).
+-export([handle_request/2, split_args/1,
+         parse_path/1, keepalive_loop/3, keepalive_loop/1, accept/2]).
 
 
 -spec start_link(pid(), tcp:socket()) -> pid().
 start_link(Server, ListenSocket) ->
     proc_lib:spawn_link(?MODULE, accept, [Server, ListenSocket]).
 
--spec accept(pid(), tcp:socket(), proplists:proplist(), callback()) -> ok.
+-spec accept(pid(), tcp:socket()) -> ok.
 %% @doc: Accept on the socket until a client connects. Handles the
 %% request, then loops if we're using keep alive or chunked
 %% transfer. If accept doesn't give us a socket within a configurable
 %% timeout, we loop to allow code upgrades of this module.
-accept(Server, ListenSocket, Options, Callback) ->
+accept(Server, ListenSocket) ->
     case catch tcp:accept(ListenSocket, Server, 10000) of %TODO: acceptTimeout
         {ok, Socket} ->
             t(accepted),
-            ?MODULE:keepalive_loop(Socket, Options, Callback);
+            ?MODULE:keepalive_loop(Socket);
         {error, timeout} ->
-            ?MODULE:accept(Server, ListenSocket, Options, Callback);
+            ?MODULE:accept(Server, ListenSocket);
         {error, econnaborted} ->
-            ?MODULE:accept(Server, ListenSocket, Options, Callback);
+            ?MODULE:accept(Server, ListenSocket);
         {error, {tls_alert, _}} ->
-            ?MODULE:accept(Server, ListenSocket, Options, Callback);
+            ?MODULE:accept(Server, ListenSocket);
         {error, closed} ->
             ok;
         {error, Other} ->
@@ -49,13 +49,13 @@ accept(Server, ListenSocket, Options, Callback) ->
 
 %% @doc: Handle multiple requests on the same connection, ie. "keep
 %% alive".
-keepalive_loop(Socket, Options, Callback) ->
-    keepalive_loop(Socket, 0, <<>>, Options, Callback).
+keepalive_loop(Socket) ->
+    keepalive_loop(Socket, 0, <<>>).
 
-keepalive_loop(Socket, NumRequests, Buffer, Options, Callback) ->
-    case ?MODULE:handle_request(Socket, Buffer, Options, Callback) of
+keepalive_loop(Socket, NumRequests, Buffer) ->
+    case ?MODULE:handle_request(Socket, Buffer) of
         {keep_alive, NewBuffer} ->
-            ?MODULE:keepalive_loop(Socket, NumRequests, NewBuffer, Options, Callback);
+            ?MODULE:keepalive_loop(Socket, NumRequests, NewBuffer);
         {close, _} ->
             tcp:close(Socket),
             ok
@@ -173,33 +173,37 @@ send_bad_request(Socket) ->
 %% @doc: Executes the user callback, translating failure into a proper
 %% response.
 execute_callback(Req) ->
-    try filerserve:handle(Req) of
+    try fileserve:handle(Req) of
         {ok, Headers, {file, Filename}}       -> {file, 200, Headers, Filename, {0, 0}};
         {ok, Headers, Body}                   -> {response, 200, Headers, Body};
 %        {ok, Body}                            -> {response, 200, [], Body};
 %        {chunk, Headers}                      -> {chunk, Headers, <<"">>};
 %        {chunk, Headers, Initial}             -> {chunk, Headers, Initial};
-%        {HttpCode, Headers, {file, Filename}} ->
-%            {file, HttpCode, Headers, Filename, {0, 0}};
+        {HttpCode, Headers, {file, Filename}} ->
+            {file, HttpCode, Headers, Filename, {0, 0}};
 %       {HttpCode, Headers, {file, Filename, Range}} ->
 %            {file, HttpCode, Headers, Filename, Range};
         {HttpCode, Headers, Body}             -> {response, HttpCode, Headers, Body};
         {HttpCode, Body}                      -> {response, HttpCode, [], Body};
-        _Unexpected                           ->
+        Unexpected                            ->
             %handle_event(Mod, invalid_return, [Req, Unexpected], Args),
-            {response, 500, [], <<"Internal server error">>}
+            Unexpected, 
+            {response, 500, [], <<"Internal server error 0">>}
     catch
         throw:{ResponseCode, Headers, Body} when is_integer(ResponseCode) ->
             {response, ResponseCode, Headers, Body};
         throw:_Exc ->
             %handle_event(Mod, request_throw, [Req, Exc, erlang:get_stacktrace()], Args),
-            {response, 500, [], <<"Internal server error">>};
+            {Module,Function,Arity,Location} = erlang:get_stacktrace(),
+            {response, 500, [], <<"Internal server error 1">>};
         error:_Error ->
             %handle_event(Mod, request_error, [Req, Error, erlang:get_stacktrace()], Args),
-            {response, 500, [], <<"Internal server error">>};
+            {Module,Function,Arity,Location} = erlang:get_stacktrace(),
+            {response, 500, [], atom_to_binary(Function, latin1)};
         exit:_Exit ->
             %handle_event(Mod, request_exit, [Req, Exit, erlang:get_stacktrace()], Args),
-            {response, 500, [], <<"Internal server error">>}
+            erlang:get_stacktrace(),
+            {response, 500, [], <<"Internal server error 3">>}
     end.
 
 %%
@@ -300,7 +304,7 @@ get_request(Socket, Buffer) ->
             exit(normal)
     end.
 
--spec get_headers(elli_tcp:socket(), version(), binary(), proplists:proplist()) ->
+-spec get_headers(tcp:socket(), version(), binary()) ->
                          {headers(), any()}.
 
 get_headers(Socket, {1, _}, Buffer) ->
@@ -338,7 +342,7 @@ get_headers(Socket, Buffer, Headers, HeadersCount) ->
             end
     end.
 
--spec get_body(elli_tcp:socket(), headers(), binary()) -> {body(), binary()}.
+-spec get_body(tcp:socket(), headers(), binary()) -> {body(), binary()}.
 %% @doc: Fetches the full body of the request, if any is available.
 %%
 %% At the moment we don't need to handle large requests, so there is

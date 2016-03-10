@@ -1,7 +1,4 @@
 
--type callback_mod() :: module().
--type callback_args() :: any().
--type callback() :: {callback_mod(), callback_args()}.
 
 -type path() :: binary().
 -type args() :: binary().
@@ -41,6 +38,5 @@
           headers :: headers(),
           body :: body(),
           pid :: pid(),
-          socket :: undefined | elli_tcp:socket(), %TODO: remove elli
-          callback :: callback()
+          socket :: undefined | tcp:socket() %TODO: remove elli
 }).

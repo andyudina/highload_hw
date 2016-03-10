@@ -7,14 +7,18 @@
 
 -include_lib("kernel/include/file.hrl").
 -include("server.hrl").
--export([handle/2, handle_event/3]).
+-export([handle/1, handle_event/3]).
 
 raw_path(#req{raw_path = Path})  -> Path.
 
-handle(Req, Config) ->
+handle(Req) ->
+    Config = [{prefix, <<"/">>},
+                       {path, <<"/tmp">>},
+                       {charset, "utf-8"}],
+    erlang:display(raw_path(Req)),
     case unprefix(raw_path(Req), prefix(Config)) of
         undefined ->
-            ignore;
+            {403, [], <<"undefined">>};
         FilePath ->
             Filename = local_path(Config, FilePath),
             case ?MODULE:file_size(Filename) of
@@ -121,7 +125,7 @@ content_type(MimeType, Charset) ->
 mime_types() ->
     ct_expand:term(
         dict:from_list(element(2, httpd_conf:load_mime_types(
-                    code:priv_dir(elli_fileserve) ++ "/mime.types")))).
+                    code:priv_dir(fileserve) ++ "/mime.types")))).
 
 mime_type(Filename) when is_binary(Filename) ->
     case filename:extension(Filename) of
