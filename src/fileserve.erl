@@ -7,7 +7,7 @@
 
 -include_lib("kernel/include/file.hrl").
 -include("server.hrl").
--export([handle/1, handle_event/3]).
+-export([handle/1, handle_event/3, file_size/1]).
 
 raw_path(#req{raw_path = Path})  -> Path.
 
