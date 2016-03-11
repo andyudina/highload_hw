@@ -7,27 +7,32 @@
 
 -include_lib("kernel/include/file.hrl").
 -include("server.hrl").
--export([handle/1, handle_event/3, file_size/1]).
+-export([handle/1, handle_event/3, file_size/1, get_dir_index/1]).
 
 raw_path(#req{raw_path = Path})  -> Path.
 
 handle(Req) ->
     Config = [{prefix, <<"/">>},
-                       {path, <<"/tmp">>},
-                       {charset, "utf-8"}],
-    erlang:display(raw_path(Req)),
+              {path, <<"./">>},
+              {charset, "utf-8"}],
     case unprefix(raw_path(Req), prefix(Config)) of
         undefined ->
             {403, [], <<"undefined">>};
         FilePath ->
             Filename = local_path(Config, FilePath),
-            case ?MODULE:file_size(Filename) of
-                {error, illegal_path} ->
-                    {403, [], <<"Not Allowed">>};
-                {error, _Reason} ->
-                    {404, [], <<"File Not Found">>};
-                {ok, Size} ->
-                    {200, headers(Filename, Size, charset(Config)), {file, Filename}}
+            case filename:basename(Filename) of
+                <<"index.html">> ->
+                     {Headers, Body} = ?MODULE:get_dir_index(path(Config)),
+                     {200, Headers, Body};
+                 _ ->
+                    case ?MODULE:file_size(Filename) of
+                        {error, illegal_path} ->
+                            {403, [], <<"Not Allowed">>};
+                        {error, _Reason} ->
+                            {404, [], <<"Not found">>};
+                        {ok, Size} ->
+                            {200, headers(Filename, Size, charset(Config)), {file, Filename}}
+                    end
             end
     end.
 
@@ -137,3 +142,17 @@ mime_type(Filename) when is_binary(Filename) ->
                 error          -> undefined
             end
     end.
+   
+get_dir_index(FilePath) ->
+    DirPath = filename:dirname(FilePath),
+    {ok, Filenames} = file:list_dir(DirPath),
+    Body = generate_index_template(Filenames),
+    {headers(<<"index.html">>, byte_size(Body), "utf-8"), Body}.
+
+generate_index_template(Filenames) ->
+    HTMLList = ["<html><body><ul>" | [lists:map(fun format_file/1, Filenames) ++ "</ul></body></html>"]],
+    string:join(HTMLList, "~n").
+       
+    
+format_file(File) ->
+    string:join(["<li>", File, "</li>"], " ").
