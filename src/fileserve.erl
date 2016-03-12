@@ -128,9 +128,9 @@ content_type(MimeType, Charset) ->
 %%
 
 mime_types() ->
-    ct_expand:term(
+    %ct_expand:term(
         dict:from_list(element(2, httpd_conf:load_mime_types(
-                    code:priv_dir(fileserve) ++ "/mime.types")))).
+             filename:join(code:lib_dir(inets), "examples/server_root/conf/mime.types")))).%).
 
 mime_type(Filename) when is_binary(Filename) ->
     case filename:extension(Filename) of
@@ -146,12 +146,12 @@ mime_type(Filename) when is_binary(Filename) ->
 get_dir_index(FilePath) ->
     DirPath = filename:dirname(FilePath),
     {ok, Filenames} = file:list_dir(DirPath),
-    Body = generate_index_template(Filenames),
+    Body = list_to_binary(generate_index_template(Filenames)),
     {headers(<<"index.html">>, byte_size(Body), "utf-8"), Body}.
 
 generate_index_template(Filenames) ->
-    HTMLList = ["<html><body><ul>" | [lists:map(fun format_file/1, Filenames) ++ "</ul></body></html>"]],
-    string:join(HTMLList, "~n").
+    HTMLList = ["<html><body><ul>"] ++ lists:map(fun format_file/1, Filenames) ++ ["</ul></body></html>"],
+    string:join(HTMLList, "").
        
     
 format_file(File) ->
