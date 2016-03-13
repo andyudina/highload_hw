@@ -32,7 +32,7 @@ start_link(Server, ListenSocket) ->
 accept(Server, ListenSocket) ->
     case catch tcp:accept(ListenSocket, Server, 10000) of %TODO: acceptTimeout
         {ok, Socket} ->
-            t(accepted),
+            %t(accepted),
             ?MODULE:keepalive_loop(Socket);
         {error, timeout} ->
             ?MODULE:accept(Server, ListenSocket);
@@ -67,26 +67,33 @@ keepalive_loop(Socket, NumRequests, Buffer) ->
 %% socket. Returns the appropriate connection token and any buffer
 %% containing (parts of) the next request.
 handle_request(S, PrevB) ->
-    {Method, RawPath, V, B0} = get_request(S, PrevB), t(request_start),
-    {RequestHeaders, B1} = get_headers(S, V, B0),     t(headers_end),
+    {Method, RawPath, V, B0} = get_request(S, PrevB), %t(request_start),
+    {RequestHeaders, B1} = get_headers(S, V, B0),     %t(headers_end),
 
     Req = mk_req(Method, RawPath, RequestHeaders, <<>>, V, S),
-    {RequestBody, B2} = get_body(S, RequestHeaders, B1), t(body_end),
+    {RequestBody, B2} = get_body(S, RequestHeaders, B1), %t(body_end),
     Req1 = Req#req{body = RequestBody},
-
-    t(user_start),
-    Response = execute_callback(Req1),
-    t(user_end),
-
-    handle_response(Req1, B2, Response).
+    %t(user_start),
+    Response = case is_valid_method(Req1) of
+        true -> 
+             execute_callback(Req1);
+        false ->
+             {response, 405, [], <<>>}
+        end,
+    %t(user_end),
+    Response1 = preprocess_response(Response),
+    handle_response(Req1, B2, Response1).
+    %erlang:display(get()).
+    
+preprocess_response(Response) ->
+    setelement(3, Response, [{<<"Server">>, <<"hw_server">>} | element(3, Response)]).   
 
 handle_response(Req, Buffer, {response, Code, UserHeaders, Body}) ->
-    Headers = [connection(Req, UserHeaders),
-               content_length(UserHeaders, Body)
+    Headers = [connection(Req, UserHeaders)
                | UserHeaders],
     send_response(Req, Code, Headers, Body),
 
-    t(request_end),
+    %t(request_end),
     %handle_event(Mod, request_complete, [Req, Code, Headers, Body, get_timings()], Args),
 
     {close_or_keepalive(Req, UserHeaders), Buffer};
@@ -96,7 +103,7 @@ handle_response(Req, Buffer, {file, ResponseCode, UserHeaders, Filename, Range})
     ResponseHeaders = [connection(Req, UserHeaders) | UserHeaders],
     send_file(Req, ResponseCode, ResponseHeaders, Filename, Range),
 
-    t(request_end),
+    %t(request_end),
     %handle_event(Mod, request_complete,
     %             [Req, ResponseCode, ResponseHeaders, <<>>, get_timings()],
     %             Args),
@@ -127,6 +134,10 @@ send_response(Req, Code, Headers, UserBody) ->
     end.
 
 
+is_valid_method(Req) ->
+     Req#req.method =:= 'HEAD' orelse  Req#req.method =:= 'GET'.
+     
+       
 -spec send_file(Request::#req{}, Code::response_code(), Headers::headers(),
                 Filename::file:filename(), Range::range()) -> ok.
 
@@ -470,13 +481,8 @@ connection_token(#req{version = {0, 9}}) ->
 
 close_or_keepalive(Req, UserHeaders) ->
     case proplists:get_value(<<"Connection">>, UserHeaders) of
-        undefined ->
-            case connection_token(Req) of
-                <<"Keep-Alive">> -> keep_alive;
-                <<"close">>      -> close
-            end;
-        <<"close">> -> close;
-        <<"Keep-Alive">> -> keep_alive
+        <<"Keep-Alive">> -> keep_alive;
+        _                -> close
     end.
 
 
@@ -490,22 +496,14 @@ connection(Req, UserHeaders) ->
             []
     end.
 
-content_length(Headers, Body)->
-    case proplists:is_defined(<<"Content-Length">>, Headers) of
-        true ->
-            [];
-        false ->
-            {<<"Content-Length">>, iolist_size(Body)}
-    end.
-
 %%
 %% PATH HELPERS
 %%
 
 parse_path({abs_path, FullPath}) ->
     case binary:split(FullPath, [<<"?">>]) of
-        [URL]       -> {ok, {FullPath, split_path(URL), []}};
-        [URL, Args] -> {ok, {FullPath, split_path(URL), split_args(Args)}}
+        [URL]       -> {ok, {URL, split_path(URL), []}};
+        [URL, Args] -> {ok, {URL, split_path(URL), split_args(Args)}}
     end;
 parse_path({absoluteURI, _Scheme, _Host, _Port, Path}) ->
     parse_path({abs_path, Path});
@@ -536,8 +534,8 @@ split_args(Qs) ->
 %% @doc: Record the current time in the process dictionary. This
 %% allows easily adding time tracing wherever, without passing along
 %% any variables.
-t(Key) ->
-    put({time, Key}, os:timestamp()).
+%t(Key) ->
+%    put({time, Key}, os:timestamp()).
 
 
 
