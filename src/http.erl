@@ -1,21 +1,12 @@
-%% @doc: Elli HTTP request implementation
-%%
-%% An elli_http process blocks in elli_tcp:accept/2 until a client
-%% connects. It then handles requests on that connection until it's
-%% closed either by the client timing out or explicitly by the user.
 -module(http).
 -include("server.hrl").
 -include("util.hrl").
 
 
-%% API
 -export([start_link/2]).
 
 -export([send_response/4]).
 
-%-export([mk_req/7]). %% useful when testing.
-
-%% Exported for looping with a fully-qualified module name
 -export([handle_request/2, split_args/1,
          parse_path/1, keepalive_loop/3, keepalive_loop/1, accept/2]).
 
@@ -25,14 +16,9 @@ start_link(Server, ListenSocket) ->
     proc_lib:spawn_link(?MODULE, accept, [Server, ListenSocket]).
 
 -spec accept(pid(), tcp:socket()) -> ok.
-%% @doc: Accept on the socket until a client connects. Handles the
-%% request, then loops if we're using keep alive or chunked
-%% transfer. If accept doesn't give us a socket within a configurable
-%% timeout, we loop to allow code upgrades of this module.
 accept(Server, ListenSocket) ->
-    case catch tcp:accept(ListenSocket, Server, 10000) of %TODO: acceptTimeout
+    case catch tcp:accept(ListenSocket, Server, ?ACCEPT_TIMEOUT) of
         {ok, Socket} ->
-            %t(accepted),
             ?MODULE:keepalive_loop(Socket);
         {error, timeout} ->
             ?MODULE:accept(Server, ListenSocket);
@@ -47,8 +33,6 @@ accept(Server, ListenSocket) ->
     end.
 
 
-%% @doc: Handle multiple requests on the same connection, ie. "keep
-%% alive".
 keepalive_loop(Socket) ->
     keepalive_loop(Socket, 0, <<>>).
 
@@ -63,27 +47,21 @@ keepalive_loop(Socket, NumRequests, Buffer) ->
 
 -spec handle_request(tcp:socket(), binary()) ->
                             {'keep_alive' | 'close', binary()}.
-%% @doc: Handle a HTTP request that will possibly come on the
-%% socket. Returns the appropriate connection token and any buffer
-%% containing (parts of) the next request.
 handle_request(S, PrevB) ->
-    {Method, RawPath, V, B0} = get_request(S, PrevB), %t(request_start),
-    {RequestHeaders, B1} = get_headers(S, V, B0),     %t(headers_end),
+    {Method, RawPath, V, B0} = get_request(S, PrevB),
+    {RequestHeaders, B1} = get_headers(S, V, B0),
 
     Req = mk_req(Method, RawPath, RequestHeaders, <<>>, V, S),
-    {RequestBody, B2} = get_body(S, RequestHeaders, B1), %t(body_end),
+    {RequestBody, B2} = get_body(S, RequestHeaders, B1),
     Req1 = Req#req{body = RequestBody},
-    %t(user_start),
     Response = case is_valid_method(Req1) of
         true -> 
              execute_callback(Req1);
         false ->
              {response, 405, [], <<>>}
         end,
-    %t(user_end),
     Response1 = preprocess_response(Response),
     handle_response(Req1, B2, Response1).
-    %erlang:display(get()).
     
 preprocess_response(Response) ->
     setelement(3, Response, [{<<"Server">>, <<"hw_server">>} | element(3, Response)]).   
@@ -92,27 +70,15 @@ handle_response(Req, Buffer, {response, Code, UserHeaders, Body}) ->
     Headers = [connection(Req, UserHeaders)
                | UserHeaders],
     send_response(Req, Code, Headers, Body),
-
-    %t(request_end),
-    %handle_event(Mod, request_complete, [Req, Code, Headers, Body, get_timings()], Args),
-
     {close_or_keepalive(Req, UserHeaders), Buffer};
 
 
 handle_response(Req, Buffer, {file, ResponseCode, UserHeaders, Filename, Range}) ->
     ResponseHeaders = [connection(Req, UserHeaders) | UserHeaders],
     send_file(Req, ResponseCode, ResponseHeaders, Filename, Range),
-
-    %t(request_end),
-    %handle_event(Mod, request_complete,
-    %             [Req, ResponseCode, ResponseHeaders, <<>>, get_timings()],
-    %             Args),
-
     {close_or_keepalive(Req, UserHeaders), Buffer}.
 
 
-
-%% @doc: Generates a HTTP response and sends it to the client
 send_response(Req, Code, Headers, UserBody) ->
     Body = case {Req#req.method, Code} of
                {'HEAD', _} -> <<>>;
@@ -128,8 +94,6 @@ send_response(Req, Code, Headers, UserBody) ->
     case tcp:send(Req#req.socket, Response) of
         ok -> ok;
         {error, Closed} when Closed =:= closed orelse Closed =:= enotconn ->
-            %#req{callback = {Mod, Args}} = Req,
-            %handle_event(Mod, client_closed, [before_response], Args),
             ok
     end.
 
@@ -141,9 +105,6 @@ is_valid_method(Req) ->
 -spec send_file(Request::#req{}, Code::response_code(), Headers::headers(),
                 Filename::file:filename(), Range::range()) -> ok.
 
-%% @doc: Sends a HTTP response to the client where the body is the
-%% contents of the given file.  Assumes correctly set response code
-%% and headers.
 send_file(Req, Code, Headers, Filename, {Offset, Length}) ->
     ResponseHeaders = [<<"HTTP/1.1 ">>, status(Code), <<"\r\n">>,
                        encode_headers(Headers), <<"\r\n">>],
@@ -156,157 +117,63 @@ send_file(Req, Code, Headers, Filename, {Offset, Length}) ->
                         {ok, _BytesSent} ->
                             ok;
                         {error, Closed} when Closed =:= closed orelse Closed =:= enotconn ->
-                            ok %TODO: logging
-                            %handle_event(Mod, client_closed, [before_response], Args)
+                            ok
                     end;
                 {error, Closed} when Closed =:= closed orelse Closed =:= enotconn ->
-                    ok %TODO: logging
-                    %handle_event(Mod, client_closed, [before_response], Args)
+                    ok 
             after
                 file:close(Fd)
             end;
         {error, _FileError} ->
-           ok %TODO: logging
-           % handle_event(Mod, file_error, [FileError], Args)
+           ok
     end, ok.
 
 send_bad_request(Socket) ->
-    %% To send a response, we must first have received everything the
-    %% client is sending. If this is not the case, send_bad_request/1
-    %% might reset the client connection.
-
     Body = <<"Bad Request">>,
     Response = [<<"HTTP/1.1 ">>, status(400), <<"\r\n">>,
                <<"Content-Length: ">>, integer_to_list(size(Body)), <<"\r\n">>,
                 <<"\r\n">>],
     tcp:send(Socket, Response).
 
-%% @doc: Executes the user callback, translating failure into a proper
-%% response.
 execute_callback(Req) ->
     try fileserve:handle(Req) of
         {ok, Headers, {file, Filename}}       -> {file, 200, Headers, Filename, {0, 0}};
         {ok, Headers, Body}                   -> {response, 200, Headers, Body};
-%        {ok, Body}                            -> {response, 200, [], Body};
-%        {chunk, Headers}                      -> {chunk, Headers, <<"">>};
-%        {chunk, Headers, Initial}             -> {chunk, Headers, Initial};
         {HttpCode, Headers, {file, Filename}} ->
             {file, HttpCode, Headers, Filename, {0, 0}};
-%       {HttpCode, Headers, {file, Filename, Range}} ->
-%            {file, HttpCode, Headers, Filename, Range};
         {HttpCode, Headers, Body}             -> {response, HttpCode, Headers, Body};
         {HttpCode, Body}                      -> {response, HttpCode, [], Body};
         Unexpected                            ->
-            %handle_event(Mod, invalid_return, [Req, Unexpected], Args),
             Unexpected, 
             {response, 500, [], <<"Internal server error 0">>}
     catch
         throw:{ResponseCode, Headers, Body} when is_integer(ResponseCode) ->
             {response, ResponseCode, Headers, Body};
         throw:_Exc ->
-            %handle_event(Mod, request_throw, [Req, Exc, erlang:get_stacktrace()], Args),
-            {Module,Function,Arity,Location} = erlang:get_stacktrace(),
             {response, 500, [], <<"Internal server error 1">>};
         error:_Error ->
-            %handle_event(Mod, request_error, [Req, Error, erlang:get_stacktrace()], Args),
-            {Module,Function,Arity,Location} = erlang:get_stacktrace(),
-            {response, 500, [], atom_to_binary(Function, latin1)};
+            {response, 500, [], <<"Internal server error 2">>};
         exit:_Exit ->
-            %handle_event(Mod, request_exit, [Req, Exit, erlang:get_stacktrace()], Args),
-            erlang:get_stacktrace(),
             {response, 500, [], <<"Internal server error 3">>}
     end.
 
-%%
-%% CHUNKED-TRANSFER
-%%
-
-
-%% @doc: The chunk loop is an intermediary between the socket and the
-%% user. We forward anything the user sends until the user sends an
-%% empty response, which signals that the connection should be
-%% closed. When the client closes the socket, the loop exits.
-%start_chunk_loop(Socket) ->
-    %% Set the socket to active so we receive the tcp_closed message
-    %% if the client closes the connection
-%    elli_tcp:setopts(Socket, [{active, once}]),
-%    ?MODULE:chunk_loop(Socket).
-
-%chunk_loop(Socket) ->
-%    {_SockType, InnerSocket} = Socket,
-%    receive
-%        {tcp_closed, InnerSocket} ->
-%            {error, client_closed};
-
-%        {chunk, close} ->
-%            case elli_tcp:send(Socket, <<"0\r\n\r\n">>) of
-%                ok ->
-%                    elli_tcp:close(Socket),
-%                    ok;
-%                {error, Closed} when Closed =:= closed orelse Closed =:= enotconn ->
-%                    {error, client_closed}
-%            end;
-%        {chunk, close, From} ->
-%            case elli_tcp:send(Socket, <<"0\r\n\r\n">>) of
-%                ok ->
-%                    elli_tcp:close(Socket),
-%                    From ! {self(), ok},
-%                    ok;
-%                {error, Closed} when Closed =:= closed orelse Closed =:= enotconn ->
-%                    From ! {self(), {error, closed}},
-%                    ok
-%            end;
-
-%        {chunk, Data} ->
-%            send_chunk(Socket, Data),
-%            ?MODULE:chunk_loop(Socket);
-%        {chunk, Data, From} ->
-%            case send_chunk(Socket, Data) of
-%                ok ->
-%                    From ! {self(), ok};
-%                {error, Closed} when Closed =:= closed orelse Closed =:= enotconn ->
-%                    From ! {self(), {error, closed}}
-%            end,
-%            ?MODULE:chunk_loop(Socket)
-%    after 10000 ->
-%            ?MODULE:chunk_loop(Socket)
-%    end.
-
-
-%send_chunk(Socket, Data) ->
-%    case iolist_size(Data) of
-%        0 -> ok;
-%        Size ->
-%            Response = [integer_to_list(Size, 16), <<"\r\n">>, Data, <<"\r\n">>],
-%            elli_tcp:send(Socket, Response)
-%    end.
-
-
-%%
-%% RECEIVE REQUEST
-%%
-
-%% @doc: Retrieves the request line
 get_request(Socket, Buffer) ->
     case erlang:decode_packet(http_bin, Buffer, []) of
         {more, _} ->
-            case tcp:recv(Socket, 0, 60000) of %TODO: request timeout
+            case tcp:recv(Socket, 0, ?REQUEST_TIMEOUT) of
                 {ok, Data} ->
                     NewBuffer = <<Buffer/binary, Data/binary>>,
                     get_request(Socket, NewBuffer);
                 {error, timeout} ->
-                    %handle_event(request_timeout, [], Args),
                     tcp:close(Socket),
                     exit(normal);
                 {error, Closed} when Closed =:= closed orelse Closed =:= enotconn ->
-                    %handle_event(Mod, request_closed, [], Args),
                     tcp:close(Socket),
                     exit(normal)
             end;
         {ok, {http_request, Method, RawPath, Version}, Rest} ->
             {Method, RawPath, Version, Rest};
         {ok, {http_error, _}, _} ->
-            %handle_event(Mod, request_parse_error, [Buffer], Args),
             send_bad_request(Socket),
             tcp:close(Socket),
             exit(normal);
@@ -322,8 +189,7 @@ get_headers(Socket, {1, _}, Buffer) ->
     get_headers(Socket, Buffer, [], 0).
 
 get_headers(Socket, _, _Headers, HeadersCount)
-  when HeadersCount >= 100 ->
-    %handle_event(Mod, bad_request, [{too_many_headers, Headers}], Args),
+  when HeadersCount >= ?MAX_HEADERS_NUMBER ->
     send_bad_request(Socket),
     tcp:close(Socket),
     exit(normal);
@@ -336,34 +202,23 @@ get_headers(Socket, Buffer, Headers, HeadersCount) ->
         {ok, http_eoh, Rest} ->
             {Headers, Rest};
         {ok, {http_error, _}, Rest} ->
-            get_headers(Socket, Rest, Headers, 10000); %TODO: header timeout
+            get_headers(Socket, Rest, Headers, ?HEADERS_TIMEOUT);
         {more, _} ->
-            case tcp:recv(Socket, 0, 10000) of %TODO: header timeout
+            case tcp:recv(Socket, 0, ?HEADERS_TIMEOUT) of
                 {ok, Data} ->
                     get_headers(Socket, <<Buffer/binary, Data/binary>>,
                                 Headers, HeadersCount);
                 {error, Closed} when Closed =:= closed orelse Closed =:= enotconn ->
-                    %handle_event(Mod, client_closed, [receiving_headers], Args),
                     tcp:close(Socket),
                     exit(normal);
                 {error, timeout} ->
-                    %handle_event(Mod, client_timeout, [receiving_headers], Args),
                     tcp:close(Socket),
                     exit(normal)
             end
     end.
 
 -spec get_body(tcp:socket(), headers(), binary()) -> {body(), binary()}.
-%% @doc: Fetches the full body of the request, if any is available.
-%%
-%% At the moment we don't need to handle large requests, so there is
-%% no need for streaming or lazily fetching the body in the user
-%% code. Fully receiving the body allows us to avoid the complex
-%% request object threading in Cowboy and the caching in Mochiweb.
-%%
-%% As we are always receiving whatever the client sends, we might have
-%% buffered too much and get parts of the next pipelined request. In
-%% that case, push it back in the buffer and handle the first request.
+
 get_body(Socket, Headers, Buffer) ->
     case proplists:get_value(<<"Content-Length">>, Headers, undefined) of
         undefined ->
@@ -378,15 +233,13 @@ get_body(Socket, Headers, Buffer) ->
                 0 ->
                     {Buffer, <<>>};
                 N when N > 0 ->
-                    case tcp:recv(Socket, N, 30000) of %body timeout
+                    case tcp:recv(Socket, N, ?BODY_TIMEOUT) of
                         {ok, Data} ->
                             {<<Buffer/binary, Data/binary>>, <<>>};
                         {error, Closed} when Closed =:= closed orelse Closed =:= enotconn ->
-                            %handle_event(Mod, client_closed, [receiving_body], Args),
                             ok = tcp:close(Socket),
                             exit(normal);
                         {error, timeout} ->
-                            %handle_event(Mod, client_timeout, [receiving_body], Args),
                             ok = tcp:close(Socket),
                             exit(normal)
                     end;
@@ -402,19 +255,12 @@ ensure_binary(Atom) when is_atom(Atom) -> atom_to_binary(Atom, latin1).
 
 
 check_max_size(Socket, ContentLength, Buffer) ->
-    case ContentLength > 1024000 of %max body size
+    case ContentLength > ?MAX_BODY_SIZE of
         true ->
-            %handle_event(Mod, bad_request, [{body_size, ContentLength}], Args),
-
-            %% To send a response, we must first receive anything the
-            %% client is sending. To avoid allowing clients to use all
-            %% our bandwidth, if the request size is too big, we
-            %% simply close the socket.
-
-            case ContentLength < 1024000 * 2 of  %max body size
+            case ContentLength < ?MAX_BODY_SIZE * 2 of
                 true ->
                     OnSocket = ContentLength - size(Buffer),
-                    tcp:recv(Socket, OnSocket, 60000),
+                    tcp:recv(Socket, OnSocket, ?REQUEST_TIMEOUT),
                     Response = [<<"HTTP/1.1 ">>, status(413), <<"\r\n">>,
                                 <<"Content-Length: 0">>, <<"\r\n\r\n">>],
                     tcp:send(Socket, Response),
@@ -439,16 +285,10 @@ mk_req(Method, RawPath, RequestHeaders, RequestBody, V, Socket) ->
                  raw_path = Path, headers = RequestHeaders,
                  body = RequestBody, pid = self(), socket = Socket};
         {error, _Reason} ->
-            %handle_event(Mod, request_parse_error,
-            %             [{Reason, {Method, RawPath}}], Args),
             send_bad_request(Socket),
             tcp:close(Socket),
             exit(normal)
     end.
-
-%%
-%% HEADERS
-%%
 
 encode_headers([]) ->
     [];
@@ -479,15 +319,13 @@ connection_token(#req{version = {0, 9}}) ->
     <<"close">>.
 
 
-close_or_keepalive(Req, UserHeaders) ->
+close_or_keepalive(_, UserHeaders) ->
     case proplists:get_value(<<"Connection">>, UserHeaders) of
         <<"Keep-Alive">> -> keep_alive;
         _                -> close
     end.
 
 
-%% @doc: Adds appropriate connection header if the user did not add
-%% one already.
 connection(Req, UserHeaders) ->
     case proplists:get_value(<<"Connection">>, UserHeaders) of
         undefined ->
@@ -495,10 +333,6 @@ connection(Req, UserHeaders) ->
         _ ->
             []
     end.
-
-%%
-%% PATH HELPERS
-%%
 
 parse_path({abs_path, FullPath}) ->
     case binary:split(FullPath, [<<"?">>]) of
@@ -514,8 +348,6 @@ split_path(Path) ->
     [P || P <- binary:split(Path, [<<"/">>], [global]),
           P =/= <<>>].
 
-%% @doc: Splits the url arguments into a proplist. Lifted from
-%% cowboy_http:x_www_form_urlencoded/2
 -spec split_args(binary()) -> list({binary(), binary() | true}).
 split_args(<<>>) ->
     [];
@@ -526,24 +358,6 @@ split_args(Qs) ->
         [Name, Value] -> {Name, Value}
     end || Token <- Tokens].
 
-
-%%
-%% TIMING HELPERS
-%%
-
-%% @doc: Record the current time in the process dictionary. This
-%% allows easily adding time tracing wherever, without passing along
-%% any variables.
-%t(Key) ->
-%    put({time, Key}, os:timestamp()).
-
-
-
-%%
-%% HTTP STATUS CODES
-%%
-
-%% @doc: Response code string. Lifted from cowboy_http_req.erl
 status(100) -> <<"100 Continue">>;
 status(101) -> <<"101 Switching Protocols">>;
 status(102) -> <<"102 Processing">>;

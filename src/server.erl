@@ -2,93 +2,34 @@
 -behaviour(gen_server).
 -include("server.hrl").
 
-%% API
 -export([start_link/0,
-         %start_link/1,
          stop/1
-         %get_acceptors/1,
-         %get_open_reqs/1,
-         %get_open_reqs/2,
         ]).
 
-%% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
 -type req() :: #req{}.
 -export_type([req/0, body/0, headers/0]).
 
--record(state, {socket :: tcp:socket(), %TODO: elli
+-record(state, {socket :: tcp:socket(),
                 acceptors :: non_neg_integer(),
                 open_reqs :: non_neg_integer(),
                 options :: [{_, _}]
 }).
 
-%%%===================================================================
-%%% API
-%%%===================================================================
-
-start_link() -> gen_server:start_link(?MODULE, [], []). %start_link(?EXAMPLE_CONF).
-
-%start_link(Opts) ->
-%    valid_callback(required_opt(callback, Opts))
-%        orelse throw(invalid_callback),
-%
-%    case proplists:get_value(name, Opts) of
-%        undefined ->
-%            gen_server:start_link(?MODULE, [Opts], []);
-%        Name ->
-%            gen_server:start_link(Name, ?MODULE, [Opts], [])
-%    end.
-
-%get_acceptors(S) ->
-%    gen_server:call(S, get_acceptors).
-
-%get_open_reqs(S) ->
-%    get_open_reqs(S, 5000).
-
-%get_open_reqs(S, Timeout) ->
-%    gen_server:call(S, get_open_reqs, Timeout).
-
-%set_callback(S, Callback, CallbackArgs) ->
-%    valid_callback(Callback) orelse throw(invalid_callback),
-%    gen_server:call(S, {set_callback, Callback, CallbackArgs}).
+start_link() -> gen_server:start_link(?MODULE, [], []).
 
 stop(S) ->
     gen_server:call(S, stop).
 
 
-%%%===================================================================
-%%% gen_server callbacks
-%%%===================================================================
-
 init(_Opts) ->
     process_flag(trap_exit, true),
 
     IPAddress = {0, 0, 0, 0},
-    Port = 8080, %TODO: access to 80
+    Port = 80,
     MinAcceptors = 20,
-    %IPAddress      = proplists:get_value(ip, Opts, {0,0,0,0}),
-    %Port           = proplists:get_value(port, Opts, 8080),
-    %MinAcceptors   = proplists:get_value(min_acceptors, Opts, 20),
-
-
-    %AcceptTimeout  = proplists:get_value(accept_timeout, Opts, 10000),
-    %RequestTimeout = proplists:get_value(request_timeout, Opts, 60000),
-    %HeaderTimeout  = proplists:get_value(header_timeout, Opts, 10000),
-    %BodyTimeout    = proplists:get_value(body_timeout, Opts, 30000),
-    %MaxBodySize    = proplists:get_value(max_body_size, Opts, 1024000),
-
-    %Options = [{accept_timeout, AcceptTimeout},
-    %           {request_timeout, RequestTimeout},
-    %           {header_timeout, HeaderTimeout},
-    %           {body_timeout, BodyTimeout},
-    %           {max_body_size, MaxBodySize}],
-
-    %% Notify the handler that we are about to start accepting
-    %% requests, so it can create necessary supporting processes, ETS
-    %% tables, etc.
-    % ok = Callback:handle_event(elli_startup, [], CallbackArgs),
 
     {ok, Socket} = tcp:listen(plain, Port, [binary,
                                                     {ip, IPAddress},
@@ -108,19 +49,6 @@ init(_Opts) ->
     {ok, #state{socket = Socket,
                 acceptors = Acceptors,
                 open_reqs = 0}}.
-                %callback = {Callback, CallbackArgs}}}.
-
-
-%handle_call(get_acceptors, _From, State) ->
-%    Acceptors = [Pid || {Pid} <- ets:tab2list(State#state.acceptors)],
-%    {reply, {ok, Acceptors}, State};
-
-%handle_call(get_open_reqs, _From, State) ->
-%    {reply, {ok, State#state.open_reqs}, State};
-
-%handle_call({set_callback, Callback, CallbackArgs}, _From, State) ->
-%    ok = Callback:handle_event(elli_reconfigure, [], CallbackArgs),
-%    {reply, ok, State#state{callback = {Callback, CallbackArgs}}};
 
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State}.
@@ -151,29 +79,12 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-%%%===================================================================
-%%% Internal functions
-%%%===================================================================
-
 remove_acceptor(State, Pid) ->
     ets:delete(State#state.acceptors, Pid),
     State#state{open_reqs = State#state.open_reqs - 1}.
 
 start_add_acceptor(State) ->
-    Pid = http:start_link(self(), State#state.socket), %,
-                               %State#state.options, State#state.callback),
+    Pid = http:start_link(self(), State#state.socket),
     ets:insert(State#state.acceptors, {Pid}),
     State#state{open_reqs = State#state.open_reqs + 1}.
 
-
-%required_opt(Name, Opts) ->
-%    case proplists:get_value(Name, Opts) of
-%        undefined ->
-%            throw(badarg);
-%        Value ->
-%            Value
-%    end.
-
-%valid_callback(Mod) ->
-%    lists:member({handle, 2}, Mod:module_info(exports)) andalso
-%        lists:member({handle_event, 3}, Mod:module_info(exports)).

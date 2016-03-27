@@ -1,5 +1,3 @@
-
-
 -type path() :: binary().
 -type args() :: binary().
 -type version() :: {0,9} | {1,0} | {1,1}.
@@ -20,14 +18,6 @@
 -type range() :: {Offset::non_neg_integer(), Length::non_neg_integer()}.
 
 -type timestamp() :: {integer(), integer(), integer()}.
-%TODO: remove elli
--type elli_event() :: elli_startup |
-                      bad_request | file_error |
-                      chunk_complete | request_complete |
-                      request_throw | request_error | request_exit |
-                      request_closed | request_parse_error |
-                      client_closed | client_timeout |
-                      invalid_return.
 
 -record(req, {
           method :: http_method(),
@@ -38,5 +28,12 @@
           headers :: headers(),
           body :: body(),
           pid :: pid(),
-          socket :: undefined | tcp:socket() %TODO: remove elli
+          socket :: undefined | tcp:socket()
 }).
+
+-define(ACCEPT_TIMEOUT, 10000).
+-define(REQUEST_TIMEOUT, 60000).
+-define(MAX_HEADERS_NUMBER, 100).
+-define(HEADERS_TIMEOUT, 10000).
+-define(BODY_TIMEOUT, 30000).
+-define(MAX_BODY_SIZE, 1024000).
